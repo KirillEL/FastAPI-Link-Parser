@@ -1,0 +1,25 @@
+[tool.poetry]
+name = "crawler"
+version = "0.1.0"
+description = ""
+authors = ["elert.2020 <elert.2020@corp.nstu.ru>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = "^0.115.2"
+uvicorn = "^0.32.0"
+sqlalchemy = "^2.0.36"
+asyncpg = "^0.30.0"
+aioredis = "^2.0.1"
+redis = "^5.1.1"
+beautifulsoup4 = "^4.12.3"
+aiohttp = "^3.10.10"
+psycopg2 = "^2.9.10"
+alembic = "^1.13.3"
+requests = "^2.32.3"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
