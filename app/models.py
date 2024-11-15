@@ -36,3 +36,13 @@ class LinkWord(Base):
     id = Column(Integer, primary_key=True, index=True)
     fk_word_id = Column(Integer, ForeignKey('wordlist.id'), nullable=False)
     fk_link_id = Column(Integer, ForeignKey('linkbetweenurl.id'), nullable=False)
+
+
+class MatchRows(Base):
+    __tablename__ = 'matchrows'
+
+    id = Column(Integer, primary_key=True, index=True)
+    url_id = Column(Integer, ForeignKey('urllist.id'), nullable=False)
+    loc_word1 = Column(Integer, nullable=False)
+    loc_word2 = Column(Integer, nullable=False)
+

@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 from .routes import global_router
-from ..redis import init_redis, delete_visited_urls
+from ..redis import redis_service
 
 
 def init_routes(_app: FastAPI):
@@ -22,8 +22,8 @@ def init_middlewares(_app: FastAPI):
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    await init_redis()
-    await delete_visited_urls()
+    await redis_service.init_redis()
+    await redis_service.delete_visited_urls()
     yield
 
 
