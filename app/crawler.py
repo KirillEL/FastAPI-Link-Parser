@@ -6,7 +6,7 @@ import aiohttp
 from bs4 import BeautifulSoup
 from sqlalchemy import select, or_, func, distinct
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.models import WordList, UrlList, WordLocation, LinkBetweenUrl, LinkWord, MatchRows
+from app.models import WordList, UrlList, WordLocation, LinkBetweenUrl, LinkWord, MatchRows, Metrics
 import re
 
 from app.redis import redis_service
@@ -49,7 +49,8 @@ async def get_words(
             text = await response.text()
             soup = BeautifulSoup(text, "html.parser")
             page_text = soup.get_text(separator=' ')
-            words = re.findall(r'\b\w+\b', page_text.lower())  # Извлечение слов
+
+            words = re.findall(r'\b[a-zA-Zа-яА-Я]+\b', page_text.lower())
 
             clean_words_with_positions = [(word, idx) for idx, word in enumerate(words) if word not in STOP_WORDS]
             print("END GET WORDS")
@@ -172,10 +173,6 @@ async def crawl(
 
 
 async def populate_matchrows(word1: str, word2: str, db: AsyncSession):
-    """
-    Заполняет таблицу MatchRows, находя URL и соответствующие локации для двух слов.
-    """
-
     stmt1 = (
         select(
             WordLocation.fk_url_id.label("url_id"),
@@ -188,7 +185,6 @@ async def populate_matchrows(word1: str, word2: str, db: AsyncSession):
     rows1 = result1.fetchall()
     print(f"rows1: {rows1}")
 
-    # Находим все URL и локации для второго слова
     stmt2 = (
         select(
             WordLocation.fk_url_id.label("url_id"),
@@ -221,7 +217,153 @@ async def populate_matchrows(word1: str, word2: str, db: AsyncSession):
                 )
                 db.add(match_row)
 
-    # Коммитим изменения в базе данных
     await db.commit()
 
     print("MatchRows table populated successfully.")
+
+
+
+
+async def calc_metrics(db: AsyncSession, damping_factor=0.85, iterations=20):
+    freq_stmt = (
+        select(
+            MatchRows.url_id.label("url_id"),
+            (
+                func.count(func.distinct(MatchRows.loc_word1)) +
+                func.count(func.distinct(MatchRows.loc_word2))
+            ).label("metric_freq")
+        )
+        .group_by(MatchRows.url_id)
+    )
+    freq_result = await db.execute(freq_stmt)
+    frequency_data = freq_result.fetchall()
+
+    urls_stmt = select(LinkBetweenUrl.fk_fromurl_id).union(
+        select(LinkBetweenUrl.fk_tourl_id)
+    )
+    urls_result = await db.execute(urls_stmt)
+    urls = [row[0] for row in urls_result.fetchall()]
+
+    num_urls = len(urls)
+    pagerank = {url: 1 / num_urls for url in urls}
+
+    links_stmt = (
+        select(LinkBetweenUrl.fk_fromurl_id, LinkBetweenUrl.fk_tourl_id)
+    )
+    links_result = await db.execute(links_stmt)
+    links = links_result.fetchall()
+
+    outgoing_links = {}
+    for from_url, to_url in links:
+        outgoing_links.setdefault(from_url, []).append(to_url)
+
+    for _ in range(iterations):
+        new_pagerank = {url: (1 - damping_factor) / num_urls for url in urls}
+        for from_url, to_urls in outgoing_links.items():
+            share = pagerank[from_url] / len(to_urls)
+            for to_url in to_urls:
+                if to_url in new_pagerank:
+                    new_pagerank[to_url] += damping_factor * share
+        pagerank = new_pagerank
+
+    max_pr = max(pagerank.values(), default=0)
+    min_pr = min(pagerank.values(), default=0)
+
+    if max_pr != min_pr:
+        normalized_pagerank = {
+            url: (pr - min_pr) / (max_pr - min_pr)
+            for url, pr in pagerank.items()
+        }
+    else:
+        normalized_pagerank = {url: 0 for url in pagerank.keys()}
+
+    metrics = {}
+    for row in frequency_data:
+        metrics[row.url_id] = {"metric_freq": row.metric_freq}
+
+    for url_id, pr in pagerank.items():
+        if url_id in metrics:
+            metrics[url_id]["metric_pagerank"] = pr
+            metrics[url_id]["normal_metric_pagerank"] = normalized_pagerank[url_id]
+
+    freq_values = [data["metric_freq"] for data in metrics.values()]
+    freq_min, freq_max = min(freq_values), max(freq_values)
+
+    for url_id, data in metrics.items():
+        data["normal_metric_freq"] = (
+            (data["metric_freq"] - freq_min) / (freq_max - freq_min) if freq_max != freq_min else 1
+        )
+        data["result_metric"] = (data["normal_metric_freq"] + data["normal_metric_pagerank"]) / 2
+
+    for url_id, data in metrics.items():
+        db.add(Metrics(
+            url_id=url_id,
+            metric_freq=data["metric_freq"],
+            metric_pagerank=data["metric_pagerank"],
+            normal_metric_freq=data["normal_metric_freq"],
+            normal_metric_pagerank=data["normal_metric_pagerank"],
+            result_metric=data["result_metric"]
+        ))
+
+    await db.commit()
+
+
+async def get_sorted_metrics(db: AsyncSession):
+    stmt = (
+        select(
+            Metrics.url_id,
+            Metrics.result_metric
+        )
+        .order_by(Metrics.result_metric.desc())
+    )
+    result = await db.execute(stmt)
+    return result.fetchall()
+
+
+async def fetch_text_from_url(url: str):
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    html = await response.text()
+                    soup = BeautifulSoup(html, "html.parser")
+                    return soup.get_text()
+                else:
+                    return f"Ошибка загрузки текста: {response.status}"
+        except Exception as e:
+            return f"Ошибка при подключении: {str(e)}"
+
+
+def highlight_words(text, words):
+    for word in words:
+        regex = re.compile(re.escape(word), re.IGNORECASE)
+        text = regex.sub(f'<span class="highlight">{word}</span>', text)
+    return text
+
+
+async def generate_html_report(db: AsyncSession, output_file="report.html"):
+    sorted_metrics = await get_sorted_metrics(db)
+    words_to_highlight = ["деятельность", "редактора"]
+
+    html_content = "<html><head><style>.highlight { background-color: yellow; font-weight: bold; }</style></head><body>"
+    html_content += "<h1>URL Report</h1>"
+
+    for url_id, result_metric in sorted_metrics:
+        stmt = select(UrlList.url).where(UrlList.id == url_id)
+        result = await db.execute(stmt)
+        url = result.scalar()
+
+
+        text = await fetch_text_from_url(url)
+
+        highlighted_text = highlight_words(text, words_to_highlight)
+
+        html_content += f"<h2>URL: {url} (Metric: {result_metric})</h2>"
+        html_content += f"<div>{highlighted_text}</div>"
+
+    html_content += "</body></html>"
+
+    with open(output_file, "w", encoding="utf-8") as f:
+        f.write(html_content)
+
+    print(f"HTML report generated: {output_file}")

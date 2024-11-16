@@ -6,7 +6,8 @@ def main():
         app="app.api.server:app",
         workers=1,
         host="0.0.0.0",
-        port=2222
+        port=2222,
+        reload=True
     )
 
 

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey
+from sqlalchemy import Column, Integer, String, ForeignKey, Float
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
@@ -46,3 +46,14 @@ class MatchRows(Base):
     loc_word1 = Column(Integer, nullable=False)
     loc_word2 = Column(Integer, nullable=False)
 
+
+class Metrics(Base):
+    __tablename__ = 'metrics'
+    id = Column(Integer, primary_key=True, index=True)
+
+    url_id = Column(Integer, ForeignKey('urllist.id'), nullable=False)
+    metric_freq = Column(Integer, nullable=False)
+    metric_pagerank = Column(Float, nullable=False)
+    normal_metric_freq = Column(Float)
+    normal_metric_pagerank = Column(Float)
+    result_metric = Column(Float)

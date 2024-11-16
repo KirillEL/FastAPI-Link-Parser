@@ -32,5 +32,5 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.execute('''
-    drop table if not exists matchrows;
+    drop table if exists matchrows;
     ''')
